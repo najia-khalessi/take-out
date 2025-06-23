@@ -1,7 +1,6 @@
 # take-out项目需求
 
-我们要做一个外卖系统，首先看向市场其他同类竞争产品，先不考虑抢用户
-功能上要向其看齐，再考虑用户体验，再考虑我们的产品特色
+基于代码库结构分析，这是一个基于 Go语言 构建的外卖配送平台，采用 微服务架构 和 Redis消息队列 实现高并发订单处理。
 
 ## 功能需求
 
@@ -14,6 +13,14 @@
 平台功能：推荐功能，派单，3方沟通页面，
 
 程序后台管理员：先不考虑这个
+
+## 技术栈
+后端语言: Go
+数据库: MySQL + Redis
+消息队列: Redis Pub/Sub
+并发处理: Goroutine + Channel
+认证: JWT Token
+容器化: Docker Compose
 
 ## 问题
 
@@ -120,47 +127,6 @@ A: 先从URL获取字符串类型的shopid，然后int化，然后转化成字�
 2. 派单给骑手: services/order_service.go → database/redis.go(消息队列) → handlers/rider.go
 3. 三方聊天: handlers/chat.go → websocket/hub.go → 广播给相关用户
 
-## 文件设计
-1. 核心启动文件
-main.go: 程序入口，初始化路由、数据库连接、启动服务器
-2. 配置层
-config/config.go: 管理所有配置信息（数据库地址、Redis地址、JWT密钥等）
-
-3. 数据模型层 (models/)
-user.go: 定义用户、商家、骑手的数据结构体
-order.go: 订单相关的数据结构体
-product.go: 商品的数据结构体
-chat.go: 聊天消息和群组的数据结构体
-
-4. 接口处理层 (handlers/)
-auth.go: 处理登录、注册接口请求
-user.go: 处理用户的下单、评论、投诉等接口
-shop.go: 查询商家，查询商店商品，查附近商家，商品管理(添加，更新库存)、接单
-rider.go: 处理骑手的抢单、接单等接口
-chat.go: 处理WebSocket聊天连接和消息
-
-5. 业务逻辑层 (services/)
-auth_service.go: 用户认证业务逻辑（验证密码、生成token）
-order_service.go: 订单核心业务逻辑（下单流程、派单算法、抢单机制）
-chat_service.go: 聊天业务逻辑（创建群聊、消息路由）
-location_service.go: 地理位置相关业务（距离计算、就近派单）
-
-6. 数据库层 (database/)
-mysql.go: MySQL数据库连接，数据库重试连接
-redis.go: Redis连接、缓存操作、消息队列
-init.sql: 创建所有数据表的SQL脚本
-
-7. 中间件层 (middleware/)
-auth.go: JWT token验证，确保接口访问权限
-cors.go: 处理跨域请求
-8. 工具函数 (utils/)
-response.go: 统一API返回格式
-jwt.go: JWT token的生成和解析
-password.go: 密码的加密和验证
-geohash.go: 地理位置哈希算法，用于就近派单
-9. WebSocket通讯 (websocket/)
-hub.go: 管理所有WebSocket连接，处理消息广播
-client.go: 单个客户端连接的处理逻辑
 
 
 ！！！
