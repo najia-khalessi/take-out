@@ -3,6 +3,7 @@ import (
 	"take-out/models"
 	"fmt"
 	"database/sql"
+	"time"
 )
 //下单：通过连接Redis连接池的客户端，创建一个消息队列在redis中，将订单信息以json格式存储到消息队列中
 func UserPlaceOrder(orderID, userID, shopID, riderID int, products []Product, rp *RedisPool) error {

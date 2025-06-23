@@ -10,14 +10,7 @@ import (
 	
 	"github.com/go-redis/redis/v8"
 )
-// 秒杀商品结构
-type SeckillProduct struct {
-	ProductID   int
-	TotalStock  int
-	SeckillStock int
-	StartTime   time.Time
-	EndTime     time.Time
-}
+
 //添加商品到商店
 func addProductForShop(rp *database.RedisPool, db *database.sql.DB, ShopID int, product *models.Product) (int64, error){
 	//检查商店是否存在
@@ -98,86 +91,3 @@ func UpdateProductStock(rp *database.RedisPool, db *database.sql.DB, productID i
     return nil
 }
 
-// 初始化秒杀商品（活动开始前调用）
-func InitSeckillProduct(rp *RedisPool, db *sql.DB, sp SeckillProduct) error {
-	// 1. 保存到数据库
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	
-	_, err = tx.Exec(`
-		INSERT INTO seckill_products 
-		(product_id, total_stock, seckill_stock, start_time, end_time)
-		VALUES (?, ?, ?, ?, ?)
-		ON DUPLICATE KEY UPDATE
-		seckill_stock = VALUES(seckill_stock),
-		start_time = VALUES(start_time),
-		end_time = VALUES(end_time)`,
-		sp.ProductID, sp.TotalStock, sp.SeckillStock, sp.StartTime, sp.EndTime)
-	
-	if err != nil {
-		return err
-	}
-	
-	// 2. 预热Redis库存
-	rdb := rp.GetClient()
-	defer rp.PutClient(rdb)
-	
-	key := fmt.Sprintf("seckill:%d", sp.ProductID)
-	err = rdb.Set(context.Background(), key, sp.SeckillStock, 0).Err()
-	if err != nil {
-		return err
-	}
-	
-	return tx.Commit()
-}
-
-// Redis预减库存（原子操作），减少秒杀库存
-func PreReduceSeckillStock(rp *RedisPool, productID int) (bool, error) {
-	// 获取Redis客户端
-	rdb := rp.GetClient()
-	defer rp.PutClient(rdb)
-	
-	// 创建上下文
-	ctx := context.Background()
-	// 构造Redis键
-	key := fmt.Sprintf("seckill:%d", productID)
-	
-	// 使用Lua脚本保证原子性
-	script := redis.NewScript(`
-		local stock = tonumber(redis.call('get', KEYS[1]))
-		if stock and stock > 0 then
-			redis.call('decr', KEYS[1])
-			return 1
-		end
-		return 0
-	`)
-	
-	// 执行Lua脚本
-	count, err := script.Run(ctx, rdb, []string{key}).Int()
-	if err != nil {
-		return false, err
-	}
-	
-	// 返回结果
-	return count == 1, nil
-}
-
-// 回滚Redis库存（当后续步骤失败时调用）
-func RollbackSeckillStock(rp *RedisPool, productID int) error {
-	// 从Redis连接池中获取一个Redis客户端
-	rdb := rp.GetClient()
-	defer rp.PutClient(rdb)
-
-	ctx := context.Background()
-	// 格式化秒杀库存的Redis键
-	key := fmt.Sprintf("seckill:%d", productID)
-	
-	// 将秒杀库存的值加1
-	//Redis 的INCR命令用于将存储在键中的数字值递增 1
-	_, err := rdb.Incr(ctx, key).Result()
-	// 返回错误
-	return err
-}
