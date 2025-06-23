@@ -1,6 +1,6 @@
 //MySQL数据库连接、基础CRUD操作
-
 package database
+
 import (
 	"context"
 	"database/sql"
@@ -16,7 +16,6 @@ const (
 
 //全局数据库连接
 var DB *sql.DB
-
 func InitDB() (*sql.DB, error) {
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",
         "root", "123456", "localhost", 3306, "utf8") 
@@ -58,25 +57,32 @@ func InitDB() (*sql.DB, error) {
 fmt.Println("数据库连接成功并以配置连接池")
 return db, nil
 }
+
 // 重试机制
+// RetryConnect 函数用于重试连接数据库，最多重试 maxRetries 次
 func RetryConnect(maxRetries int) (*sql.DB, error) {
+    // 定义数据库连接变量
     var db *sql.DB
     var err error
-    
+
     for i := 0; i < maxRetries; i++ {
+        // 初始化数据库连接
         db, err = InitDB()
+        // 如果连接成功，则返回数据库连接和 nil 错误
         if err == nil {
             logDBStats(db)
             return db, nil
         }
+        // 如果连接失败，则打印错误信息，并等待一段时间后重试
         log.Printf("第 %d 次重试连接失败: %v", i+1, err)
         time.Sleep(time.Second * time.Duration(i+1))
     }
     
+    // 如果达到最大重试次数，则返回 nil 和错误信息
     return nil, fmt.Errorf("达到最大重试次数(%d): %w", maxRetries, err)
 }
 
-// 监控函数
+// 监控mysql连接池
 func logDBStats(db *sql.DB) {
     if db != nil {
         stats := db.Stats()
