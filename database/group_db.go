@@ -5,7 +5,23 @@ import (
 	"database/sql"
 	"fmt"
 )
+// CreateGroup 创建与订单关联的新聊天群组
+func CreateGroup(order map[string]interface{}, rp *RedisPool, db *sql.DB, tx *sql.Tx) error {
+	group := &Group{
+		OrderID: int(order["order_id"].(float64)), // JSON 反序列化时数字会被转换为 float64
+		UserID:  int(order["user_id"].(float64)),
+		ShopID:  int(order["shop_id"].(float64)),
+		RiderID: int(order["rider_id"].(float64)),
+	}
 
+	groupID, err := insertGroup(tx, rp, group) // 使用传入的事务对象
+	if err != nil {
+		return fmt.Errorf("创建群组失败: %v", err)
+	}
+
+	fmt.Printf("群组创建成功, ID: %d\n", groupID)
+	return nil
+}
 // insertGroup 插入群组信息到数据库和Redis，使用传入的事务对象
 func insertGroup(tx *sql.Tx, rp *RedisPool, group *Group) (int64, error) {
     // 使用提供的事务对象将群组插入MySQL
