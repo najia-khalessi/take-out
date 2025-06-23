@@ -13,24 +13,6 @@ IM系统拿到OrderlD后读MQ(Order结构体下有UserlD，ShoplD，RiderlD)
 创建了一个群聊，实现聊天,groupid应该是和orderid绑定的。
 */
 
-// CreateGroup 创建与订单关联的新聊天群组
-func CreateGroup(order map[string]interface{}, rp *RedisPool, db *sql.DB, tx *sql.Tx) error {
-	group := &Group{
-		OrderID: int(order["order_id"].(float64)), // JSON 反序列化时数字会被转换为 float64
-		UserID:  int(order["user_id"].(float64)),
-		ShopID:  int(order["shop_id"].(float64)),
-		RiderID: int(order["rider_id"].(float64)),
-	}
-
-	groupID, err := insertGroup(tx, rp, group) // 使用传入的事务对象
-	if err != nil {
-		return fmt.Errorf("创建群组失败: %v", err)
-	}
-
-	fmt.Printf("群组创建成功, ID: %d\n", groupID)
-	return nil
-}
-
 // NewGroupMessage 创建带有时间戳的新消息
 func NewGroupMessage(messageID, groupID, senderID int, content string) *Message {
 	return &Message{
