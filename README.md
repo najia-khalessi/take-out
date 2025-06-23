@@ -1,6 +1,6 @@
 # take-out项目需求
 
-基于代码库结构分析，这是一个基于 Go语言 构建的外卖配送平台，采用 微服务架构 和 Redis消息队列 实现高并发订单处理。
+基于代码库结构分析，这是一个基于 Go语言 构建的外卖配送平台，采用 微服务架构 和 Redis消息队列 实现高并发订单处理+秒杀功能
 
 ## 功能需求
 
@@ -75,6 +75,17 @@ A: 接受请求参数--参数验证--构建Redis查询
 12. 数据类型的转换
 A: 先从URL获取字符串类型的shopid，然后int化，然后转化成字符串形式，形成键值对在redis中查询缓存，缓存命中就在redis中带着键值对以JSON形式的data字节直接返回给前端，如果没有命中就在mysql中进行查找，缓存命中后由于mysql返回值是结构体切片（根据函数返回值变化），所以进行序列化后再存入redis中，最后以json化形式传前端显示
 
+13. 秒杀功能的实现
+A: 1.数据库+Redis双写：数据库持久化+Redis缓存预热：将库存信息提前加载到Redis中，提高秒杀时的读取性能
+   2.更新Redis库存：Redis的单线程特性和Lua脚本的原子性，使用Lua脚本确保库存检查和减少操作的原子性。因为在高并发场景下，如果分别执行GET和DECR操作，可能会出现竞态条件
+   3.防止超卖（Mysql库存）：验证秒杀活动有效性,再通过乐观锁确保库存不会变成负数
+
+14. Lua脚本逻辑：
+获取当前库存数量
+检查库存是否存在且大于0
+如果满足条件，则减少库存并返回1
+否则返回0
+
 ## 数据库设计
 表的字段设计：
     用户：userid，username, userpassword, phone, Address, UserLatitude,UserLongitude
@@ -83,33 +94,28 @@ A: 先从URL获取字符串类型的shopid，然后int化，然后转化成字�
     商品：productid, productname, productprice
     订单：orderid, userid, shopid, riderid, starttime, endtime，price
     群聊：groupid, userid, shopid, riderid
-    聊天信息：messageid(虽然还是有点离谱), userid，shopid, riderid, content
+    聊天信息：messageid, userid，shopid, riderid, content
 
 数据访问流程：
 1. 先查 Redis 缓存
 2. 缓存未命中再查 MySQL
 3. 将 MySQL 数据更新到 Redis
 
-表的索引设计：
-    
-
-
 ## 代码设计
-1.技术栈选择：
+1. 技术栈选择：
     后端：GO + Gin框架
     数据库：MySQL + Redis
     消息队列：Redis
     实时通讯：Redis Pub/Sub
-2.缓存策略：Read/Write Through（读穿 / 写穿）策略。
-3.连接池：groutine, redispool, mysqlpool
-4.http请求：
-5.缓存设计：实现 MySQL + Redis 的双写一致性方案，使用 Redis Hash 结构存储商品信息(shop.148)，实现缓存更新与失效策略(shop.165)
+2. 连接池：groutine, redispool, mysqlpool
+3. http请求：
+4. 缓存设计：实现 MySQL + Redis 的双写一致性方案
 
 ## 预备流程
 1. 用户/骑手/商家注册登录
 2. 商家上传菜品 insertproduct
 
-核心交互流程
+## 核心交互流程
 1. 用户获取商家列表
 2. 用户获取指定商家商品列表
 3. 用户下单购买指定商家指定商品
@@ -292,3 +298,4 @@ order.go
     使用Redis发布订阅模式异步处理订单（rdb.Publish）
     订单数据以JSON格式存储（json.Marshal）
     缓存键格式：order_status_{orderID}
+
