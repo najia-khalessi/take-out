@@ -2,101 +2,100 @@
 package main
 
 import (
-    "log"
-    "take-out/database"  // 修改为相对路径
-)
-var (
-	rp *RedisPool // Redis连接池
-	db *sql.DB    // MySQL数据库连接
+	"database/sql"
+	"net/http"
+	"take-out/database"
+	"take-out/handlers"
+	"take-out/logging"
+	"take-out/monitoring"
+	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
-// 服务启动时调用
-go startOrderConsumer(redisPool)
+var (
+	db *sql.DB
+	rp *database.RedisPool
+)
 
 func main() {
-    if err := database.InitRedis(); err != nil {
-        log.Fatalf("Redis初始化失败: %v", err)
-    }
-    // 初始化数据库连接
-    db, err := database.InitDB()
-    if err != nil {
-        // 连接失败时启动重试机制
-        db, err = database.RetryConnect(database.maxRetries)
-        if err != nil {
-            log.Fatal("数据库连接失败:", err)
-        }
-    }
-    defer db.Close()
-    
-    //启动数据库监控
-    database.StartDBMonitor(db, 5*time.Minute) // 每5分钟监控一次
-    
-	// 初始化一致性哈希
-    hashConsistent = common.NewConsistent()
-    for _, node := range config.SeckillNodes {
-        hashConsistent.Add(node)
-    }
-    
-    // 获取本机IP
-    localIp, err := common.GetEntranceIp()
-    if err != nil {
-        log.Fatal(err)
-    }
-    localHost = localIp
-  
-	// 启动服务器
-    if err := StartServer(); err != nil {
-        log.Fatal("服务器启动失败:", err)
-    }
+	var err error
+	// 初始化日志
+	logging.Init()
 
-    //Gin框架
-    router := gin.Default()
-    router.GET("/shops", handleGetShops)  // 处理获取店铺列表的请求
-    router.GET("/shop/products", handleShopProducts )  // 处理获取店铺商品列表的请求
-    router.GET("/shop/orders", handleNearbyShops)  // 处理获取附近店铺的请求
-
-    http.HandleFunc("/protected", authenticateToken(protectedEndpoint))                // 验证用户
-	http.HandleFunc("/protected/shop", authenticateTokenShop(rp, protectedEndpoint))   // 验证商家
-	http.HandleFunc("/protected/rider", authenticateTokenRider(rp, protectedEndpoint)) // 验证骑手
-
-	http.HandleFunc("/user/register", handleRegister) // 用户注册
-	http.HandleFunc("/user/login", handleLogin)       // 用户登录
-
-	http.HandleFunc("/shops", handleGetShops)           // 获取商家列表
-	http.HandleFunc("/shops", handleNearbyShops)        // 获取附近商家
-	http.HandleFunc("/products", handleShopProducts)    // 查询商家商品
-	http.HandleFunc("/order", handleOrder)              // 用户提交订单
-	http.HandleFunc("/order/status", handleOrderStatus) // 查询订单状态
-
-	http.HandleFunc("/shop/register", handleRegisterShop)              // 商家注册
-	http.HandleFunc("/shop/login", handleLoginShop)                    // 商家登录
-	http.HandleFunc("/shop/add_product", handleAddProductForShop)      // 商家添加商品
-	http.HandleFunc("/shop/accept_order", handleAcceptOrder)           // 商家接单+确认订单
-	http.HandleFunc("/shop/publish_order", handlePublishDeliveryOrder) // 商家发布订单
-
-	
-	http.HandleFunc("/rider/apply", handleApplyForRider)         // 骑手身份申请
-	http.HandleFunc("/notify", handNotifyNearbyRider) // 系统随机通知骑手
-	http.HandleFunc("/rider/grab", handleRiderGrabOrder) // 骑手抢单
-	http.HandleFunc("/rider/complete", handleCompleteOrder)      // 骑手完成订单
-
-	http.HandleFunc("/im/send", handleSendMessage(db, rp))     // 发送群组消息
-	http.HandleFunc("/im/messages", handleGetMessages(db, rp)) // 获取群组消息
-
-	// 启动每周清理调度器
-	go StartWeeklyCleanUpScheduler(db)
-
-	log.Println("服务器启动，端口 :8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
-		log.Fatalf("服务器启动失败: %v", err)
+	// 初始化 Redis 连接池
+	rp, err = database.InitRedis()
+	if err != nil {
+		logging.Error("Redis初始化失败", logrus.Fields{"error": err})
 	}
 
-    // 启动秒杀订单消费者
-    go startSeckillOrderConsumer()
-    
-    // 注册秒杀路由
-    http.HandleFunc("/seckill/order", 
-        SeckillAuthMiddleware(handleSeckillOrder))
+	// 初始化数据库连接
+	db, err = database.InitDB()
+	if err != nil {
+		// 连接失败时启动重试机制
+		db, err = database.RetryConnect(3)
+		if err != nil {
+			logging.Error("数据库连接失败", logrus.Fields{"error": err})
+		}
+	}
+	defer db.Close()
 
-	http.HandleFunc("/refresh", handleRefreshToken) // 新增路由，用于刷新token
+	//启动数据库监控
+	go database.StartDBMonitor(db, 5*time.Minute) // 每5分钟监控一次
+
+	// 启动后台任务
+	go handlers.StartOrderConsumer(rp)
+	go database.StartWeeklyCleanUpScheduler(db)
+
+	// 无需Token验证的路由
+	http.Handle("/user/register", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleRegister(db, rp))))
+	http.Handle("/user/login", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleLogin(db, rp))))
+	http.Handle("/shop/register", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleRegisterShop(db, rp))))
+	http.Handle("/shop/login", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleLoginShop(db, rp))))
+	http.Handle("/rider/apply", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleApplyForRider(db, rp))))
+	http.Handle("/refresh", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleRefreshToken(rp))))
+
+	// 用户路由组
+	userRoutes := http.NewServeMux()
+	userRoutes.Handle("/shops", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleGetShops(db))))
+	userRoutes.Handle("/products", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleShopProducts(db, rp))))
+	userRoutes.Handle("/order", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleOrder(db, rp))))
+	userRoutes.Handle("/order/status", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleOrderStatus(db, rp))))
+	userRoutes.Handle("/nearby-shops", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleNearbyShops(db, rp))))
+	// IM 路由
+	userRoutes.Handle("/im/send", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleSendMessage(db, rp))))
+	userRoutes.Handle("/im/messages", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleGetMessages(db, rp))))
+	// 评价路由
+	userRoutes.Handle("/review/create", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.CreateReview(db, rp))))
+	userRoutes.Handle("/review/update", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.UpdateReview(db, rp))))
+	http.Handle("/user/", handlers.LoggingMiddleware(handlers.AuthenticateToken(rp)(userRoutes)))
+
+	// 商家路由组
+	shopRoutes := http.NewServeMux()
+	shopRoutes.Handle("/add_product", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleAddProduct(db, rp))))
+	shopRoutes.Handle("/update_stock", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleUpdateProductStock(db, rp))))
+	shopRoutes.Handle("/accept_order", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleAcceptOrder(db, rp))))
+	shopRoutes.Handle("/publish_order", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandlePublishDeliveryOrder(db, rp))))
+	// 评价路由
+	shopRoutes.Handle("/reviews", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.GetShopReviews(db, rp))))
+	shopRoutes.Handle("/review/reply", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.ReplyToReview(db, rp))))
+	shopRoutes.Handle("/review/analytics", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.GetReviewAnalytics(db, rp))))
+	http.Handle("/shop/", handlers.LoggingMiddleware(handlers.AuthenticateTokenShop(rp)(shopRoutes)))
+
+	// 骑手路由组
+	riderRoutes := http.NewServeMux()
+	riderRoutes.Handle("/grab", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleRiderGrabOrder(db, rp))))
+	riderRoutes.Handle("/complete", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleCompleteOrder(db))))
+	// 评价路由
+	riderRoutes.Handle("/confirm_delivery", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.RiderConfirmDelivery(db, rp))))
+	http.Handle("/rider/", handlers.LoggingMiddleware(handlers.AuthenticateTokenRider(rp)(riderRoutes)))
+
+	// 暴露 /metrics 接口
+	http.Handle("/metrics", handlers.LoggingMiddleware(monitoring.MetricsHandler()))
+
+	// 启动服务器
+	logging.Info("服务器启动，端口 :8080", nil)
+	if err := http.ListenAndServe(":8080", nil); err != nil {
+		logging.Error("服务器启动失败", logrus.Fields{"error": err})
+	}
 }

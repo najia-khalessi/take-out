@@ -9,15 +9,19 @@ import (
 	"net/http"
 	"time"
 
+	"take-out/database"
+	"take-out/models"
+
 	"github.com/redis/go-redis/v9"
 )
+
 // HandleSendMessage 处理通过 HTTP 请求发送消息
 // 先将消息保存到数据库，然后再发布到 Redis
 // 如果数据库保存失败，可以立即返回错误，而不必处理已发送的 Redis 消息可能带来的不一致问题
 // 避免了在发布消息到 Redis 后数据库写入失败的情况
-func handleSendMessage(db *sql.DB, rp *RedisPool) http.HandlerFunc {
+func HandleSendMessage(db *sql.DB, rp *database.RedisPool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var msg Message
+		var msg models.Message
 		if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
 			log.Printf("解析请求体失败: %v", err)
 			http.Error(w, "无效的请求体", http.StatusBadRequest)
@@ -28,7 +32,7 @@ func handleSendMessage(db *sql.DB, rp *RedisPool) http.HandlerFunc {
 		msg.Timestamp = time.Now()
 
 		// 将消息先保存到数据库，确保数据持久化
-		if err := SaveMessage(db, &msg); err != nil {
+		if err := database.SaveMessage(db, &msg); err != nil {
 			log.Printf("保存消息失败: %v", err)
 			http.Error(w, fmt.Sprintf("保存消息失败: %v", err), http.StatusInternalServerError)
 			return
@@ -36,7 +40,7 @@ func handleSendMessage(db *sql.DB, rp *RedisPool) http.HandlerFunc {
 
 		// 将消息发布到 Redis 频道，供其他组件实时处理
 		channel := fmt.Sprintf("group_%d", msg.GroupID)
-		if err := PublishMessage(rp, channel, msg.Content); err != nil {
+		if err := database.PublishMessage(rp, channel, msg.Content); err != nil {
 			log.Printf("发布消息失败: %v", err)
 			http.Error(w, fmt.Sprintf("发布消息失败: %v", err), http.StatusInternalServerError)
 			return
@@ -49,7 +53,7 @@ func handleSendMessage(db *sql.DB, rp *RedisPool) http.HandlerFunc {
 }
 
 // HandleGetMessages 处理获取特定群组消息的 HTTP 请求
-func handleGetMessages(db *sql.DB, rp *RedisPool) http.HandlerFunc {
+func HandleGetMessages(db *sql.DB, rp *database.RedisPool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := r.URL.Query().Get("group_id")
 		if groupID == "" {
@@ -71,9 +75,9 @@ func handleGetMessages(db *sql.DB, rp *RedisPool) http.HandlerFunc {
 			}
 			defer rows.Close()
 
-			var messages []Message
+			var messages []models.Message
 			for rows.Next() {
-				var msg Message
+				var msg models.Message
 				if err := rows.Scan(&msg.GroupID, &msg.SenderID, &msg.SenderName, &msg.Content, &msg.Timestamp); err != nil {
 					http.Error(w, fmt.Sprintf("解析消息失败: %v", err), http.StatusInternalServerError)
 					return
@@ -95,4 +99,3 @@ func handleGetMessages(db *sql.DB, rp *RedisPool) http.HandlerFunc {
 		}
 	}
 }
-

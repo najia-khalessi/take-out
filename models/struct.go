@@ -1,25 +1,27 @@
-package main
+package models
 
 import "time"
 
 // 用户结构体
 type User struct {
 	UserID   int    `json:"user_id"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Phone    string `json:"phone"`
-	Address  string `json:"address"`
+	Username string `json:"user_name"`
+	UserPassword string `json:"user_password"`
+	UserPhone    string `json:"user_phone"`
+	UserAddress  string `json:"user_address"`
 }
 
 // 骑手的结构
 type Rider struct {
 	User                // 内嵌 User 结构体，继承用户的基本字段
 	RiderID     int     `json:"rider_id"`     // 骑手ID，区分于 UserID
-	VehicleType string  `json:"vehicle_type"` // 骑手使用的交通工具类型
-	Rating      float64 `json:"rating"`       // 骑手的评分
+	RiderRating float64 `json:"rider_rating"`       // 骑手的评分
+	RiderPhone	string	`json:"rider_phone"`
+	VehicleType string  `json:"vehicle_type"` // 车辆类型
 	RiderStatus string  `json:"rider_status"` // 骑手状态（如在线、休息、离线）
-	Latitude    float64 `json:"latitude"`     // 骑手的纬度
-	Longitude   float64 `json:"longitude"`    // 骑手的经度
+	RiderLatitude    float64 `json:"rider_latitude"`     // 骑手的纬度
+	RiderLongitude   float64 `json:"rider_longitude"`    // 骑手的经度
+	DeliveryFee float64 `json:"delivery_fee"` // 配送费
 }
 
 // 商家结构体
@@ -27,11 +29,11 @@ type Shop struct {
 	ShopID       int     `json:"shop_id"`
 	ShopName     string  `json:"shop_name"`
 	ShopPassword string  `json:"shop_password"`
-	Phone        string  `json:"phone"`
-	Address      string  `json:"address"`
+	ShopPhone        string  `json:"shop_phone"`
+	ShopAddress      string  `json:"shop_address"`
 	Description  string  `json:"description"`
-	Latitude     float64 `json:"latitude"`  // 商家的纬度
-	Longitude    float64 `json:"longitude"` // 商家的经度
+	ShopLatitude     float64 `json:"shop_latitude"`  // 商家的纬度
+	ShopLongitude    float64 `json:"shop_longitude"` // 商家的经度
 }
 
 // 商品结构体
@@ -57,6 +59,7 @@ type Order struct {
 	OrderTime   time.Time `json:"order_time"`
 	ProductName string    `json:"product_name"`
 	TotalPrice  float64   `json:"total_price"`
+	DeliveryFee float64   `json:"delivery_fee"` // 配送费
 	GroupID     int       `json:"group_id,omitempty"`
 }
 
