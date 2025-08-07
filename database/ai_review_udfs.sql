@@ -7,18 +7,6 @@ BEGIN
     -- 安装必要扩展
     CREATE EXTENSION IF NOT EXISTS plpython3u;
     CREATE EXTENSION IF NOT EXISTS pgvector;
-
-    -- 创建配置表
-    CREATE TABLE IF NOT EXISTS ai_config (
-        key VARCHAR(100) PRIMARY KEY,
-        value TEXT
-    );
-
-    -- 插入DeepSeek配置
-    INSERT INTO ai_config (key, value) VALUES
-        ('deepseek_api_key', 'your-api-key-here'),
-        ('api_timeout', '30'),
-        ('sentiment_model', 'deepseek-chat');
 END;
 $$ LANGUAGE plpgsql;
 
@@ -26,21 +14,27 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION ai_review_analyze(
     review_content TEXT,
     user_rating INTEGER
-) RETURNS JSON AS $$
+) RETURNS JSONB AS $$
 DECLARE
-    result JSON;
-    prompt TEXT;
+    raw_result TEXT;
+    cleaned_result TEXT;
+    result JSONB;
 BEGIN
-    -- 构建prompt
-    prompt := '作为外卖平台客服分析专家，请分析以下用户评价并提供结构化分析结果：' ||
-              '\n评价内容：' || review_content ||
-              '\n用户评分：' || user_rating || '/5' ||
-              '\n请返回JSON格式：{"emotional_intensity":1-5,"delivery_issue":bool,"food_quality_issue":bool,"service_issue":bool,"summary_20chars":"20字摘要","suggested_reply":"商家回复建议"}';
-
     -- 调用DeepSeek API
-    SELECT ai_call_deepseek(prompt) INTO result;
+    SELECT openai.prompt(
+        -- System Prompt: 定义AI的角色和任务
+        '你是一个专业的外卖平台评价分析师。你的任务是基于用户评价和评分，返回一个结构化的JSON对象。JSON必须包含以下字段：emotional_intensity (情感强度, 1-5), delivery_issue (是否配送问题, bool), food_quality_issue (是否食物质量问题, bool), service_issue (是否服务问题, bool), summary_20chars (20字摘要), suggested_reply (给商家的回复建议)。',
+        -- User Prompt: 用户的实际评价内容
+        '评价内容：' || review_content || ' | 用户评分：' || user_rating || '/5'
+    ) INTO raw_result;
 
-    RETURN result::JSON;
+    -- 移除Markdown代码块标记
+    cleaned_result := regexp_replace(raw_result, '```json\n|\n```', '', 'g');
+
+    -- 将清理后的字符串转换为JSONB
+    result := cleaned_result::jsonb;
+
+    RETURN result;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -48,8 +42,7 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION ai_review_deinit()
 RETURNS VOID AS $$
 BEGIN
-    -- 清理临时数据
-    TRUNCATE ai_analysis;
-    UPDATE ai_config SET value = '' WHERE key = 'deepseek_api_key';
+    -- 此函数可以保留，用于未来可能的清理任务
+    -- 例如：TRUNCATE some_temporary_table;
 END;
 $$ LANGUAGE plpgsql;
