@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"take-out/database"
 	"take-out/models"
+	"take-out/monitoring"
+	"take-out/response"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -39,36 +41,57 @@ func StartOrderConsumer(rp *database.RedisPool) {
 func HandleOrder(db *sql.DB, rp *database.RedisPool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			http.Error(w, "只支持 POST 请求", http.StatusMethodNotAllowed)
+			response.Error(w, "只支持 POST 请求", http.StatusMethodNotAllowed)
 			return
 		}
+
+		userID, ok := r.Context().Value("userID").(int)
+		if !ok || userID == 0 {
+			response.Unauthorized(w, "无效的用户身份")
+			return
+		}
+
 		var order models.Order
 		if err := json.NewDecoder(r.Body).Decode(&order); err != nil {
-			http.Error(w, "请求体解析错误", http.StatusBadRequest)
+			response.BadRequest(w, "请求格式错误", "无效的JSON格式")
+			return
+		}
+
+		// 参数验证
+		if order.ProductID == 0 {
+			response.ValidationError(w, "商品ID不能为空", "product_id")
+			return
+		}
+		if order.Quantity <= 0 {
+			response.ValidationError(w, "商品数量必须大于0", "quantity")
 			return
 		}
 
 		// 查询商品价格
 		var productPrice float64
 		if err := db.QueryRow("SELECT price FROM products WHERE productid = ?", order.ProductID).Scan(&productPrice); err != nil {
-			http.Error(w, "商品不存在", http.StatusBadRequest)
+			response.NotFound(w, "商品不存在")
 			return
 		}
-		// 查询骑手配送费
-		var deliveryFee float64
-		if err := db.QueryRow("SELECT delivery_fee FROM riders WHERE riderid = ?", order.RiderID).Scan(&deliveryFee); err != nil {
-			deliveryFee = 0 // 没有骑手时默认0元
-		}
-		order.DeliveryFee = deliveryFee
-		order.TotalPrice = productPrice + deliveryFee
 
-		// 设置初始订单状态
+		// 查询商品所属店铺
+		var shopID int
+		if err := db.QueryRow("SELECT shop_id FROM products WHERE productid = ?", order.ProductID).Scan(&shopID); err != nil {
+			response.ServerError(w, err)
+			return
+		}
+
+		// 设置订单基本属性
+		order.UserID = userID
+		order.ShopID = shopID
+		order.TotalPrice = productPrice * float64(order.Quantity)
+		order.DeliveryFee = 5.0 // 默认快递费5元
 		order.OrderStatus = "商家待确认"
 
 		// 插入订单到数据库
 		orderID, err := database.InsertOrder(db, &order)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("订单插入失败: %v", err), http.StatusInternalServerError)
+			response.ServerError(w, err)
 			return
 		}
 
@@ -78,15 +101,18 @@ func HandleOrder(db *sql.DB, rp *database.RedisPool) http.HandlerFunc {
 		jsonData, _ := json.Marshal(order)
 		database.SetToCache(rp, fmt.Sprintf("order_status_%d", order.OrderID), string(jsonData), time.Hour)
 
-		// 订单已成功插入数据库并获得了有效的 orderID，Redis 缓存已更新，确保数据一致性，发布到消息队列
+		// 发布订单到消息队列
 		err = database.UserPlaceOrder(order.OrderID, order.UserID, order.ShopID, 0, []models.Product{}, rp)
 		if err != nil {
 			log.Printf("发布订单到消息队列失败: %v", err)
 		}
 
-		// 返回订单详情和订单ID
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(order)
+		response.Created(w, map[string]interface{}{
+			"order_id":    order.OrderID,
+			"order_no":    order.OrderNo,
+			"total_price": order.TotalPrice,
+			"status":      order.OrderStatus,
+		}, "订单创建成功")
 	}
 }
 
@@ -96,33 +122,34 @@ func HandleOrderStatus(db *sql.DB, rp *database.RedisPool) http.HandlerFunc {
 		orderIDStr := r.URL.Query().Get("order_id")
 		orderID, err := strconv.Atoi(orderIDStr)
 		if err != nil {
-			http.Error(w, "无效的订单ID", http.StatusBadRequest)
+			response.ValidationError(w, "订单ID格式错误", "order_id")
 			return
 		}
 
 		cacheKey := fmt.Sprintf("order_status_%d", orderID)
 		data, err := database.GetFromCache(rp, cacheKey)
 		if err == nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(data))
-			return
+			var order models.Order
+			if err := json.Unmarshal([]byte(data), &order); err == nil {
+				response.Success(w, order, "获取订单状态成功")
+				return
+			}
 		}
 
 		// 缓存未命中，从数据库查询订单状态
 		order, err := database.QueryOrderStatus(db, orderID)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("订单不存在: %v", err), http.StatusInternalServerError)
+			response.NotFound(w, "订单不存在")
 			return
 		}
 
+		// 更新缓存
 		jsonData, err := json.Marshal(order)
-		if err != nil {
-			http.Error(w, "JSON 序列化错误", http.StatusInternalServerError)
-			return
+		if err == nil {
+			database.SetToCache(rp, cacheKey, string(jsonData), time.Hour)
 		}
-		database.SetToCache(rp, cacheKey, string(jsonData), time.Hour)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(jsonData)
+
+		response.Success(w, order, "获取订单状态成功")
 	}
 }
 
@@ -130,9 +157,16 @@ func HandleOrderStatus(db *sql.DB, rp *database.RedisPool) http.HandlerFunc {
 func HandleAcceptOrder(db *sql.DB, rp *database.RedisPool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			http.Error(w, "只支持 POST 请求", http.StatusMethodNotAllowed)
+			response.Error(w, "只支持 POST 请求", http.StatusMethodNotAllowed)
 			return
 		}
+
+		shopID, ok := r.Context().Value("shopID").(int)
+		if !ok || shopID == 0 {
+			response.Unauthorized(w, "无效的店铺身份")
+			return
+		}
+
 		// 定义请求体结构
 		var acceptRequest struct {
 			OrderID int `json:"order_id"`
@@ -140,28 +174,44 @@ func HandleAcceptOrder(db *sql.DB, rp *database.RedisPool) http.HandlerFunc {
 
 		// 解析请求体
 		if err := json.NewDecoder(r.Body).Decode(&acceptRequest); err != nil {
-			http.Error(w, "请求体解析错误", http.StatusBadRequest)
+			response.BadRequest(w, "请求格式错误", "无效的JSON格式")
+			return
+		}
+
+		if acceptRequest.OrderID == 0 {
+			response.ValidationError(w, "订单ID不能为空", "order_id")
+			return
+		}
+
+		// 检查订单是否属于该店铺
+		var currentShopID int
+		if err := db.QueryRow("SELECT shop_id FROM orders WHERE order_id = ?", acceptRequest.OrderID).Scan(&currentShopID); err != nil {
+			response.NotFound(w, "订单不存在")
+			return
+		}
+		if currentShopID != shopID {
+			response.Forbidden(w, "该订单不属于您的店铺")
 			return
 		}
 
 		// 更新订单状态为 "商家已接单"
 		err := database.UpdateOrderStatus(db, acceptRequest.OrderID, "商家已接单")
 		if err != nil {
-			http.Error(w, fmt.Sprintf("更新订单状态失败: %v", err), http.StatusInternalServerError)
+			response.ServerError(w, err)
 			return
 		}
 
 		// 查询订单状态
 		order, err := database.QueryOrderStatus(db, acceptRequest.OrderID)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("查询订单失败: %v", err), http.StatusInternalServerError)
+			response.ServerError(w, err)
 			return
 		}
 
 		// 创建聊天群组
 		tx, err := db.Begin()
 		if err != nil {
-			http.Error(w, "开启事务失败", http.StatusInternalServerError)
+			response.ServerError(w, err)
 			return
 		}
 		err = database.CreateGroup(map[string]interface{}{
@@ -169,17 +219,18 @@ func HandleAcceptOrder(db *sql.DB, rp *database.RedisPool) http.HandlerFunc {
 			"user_id":  order.UserID,
 			"shop_id":  order.ShopID,
 			"rider_id": order.RiderID,
-		}, rp, db, tx) // 或者传递一个有效的事务对象
+		}, rp, db, tx)
 		if err != nil {
 			tx.Rollback()
-			http.Error(w, fmt.Sprintf("创建聊天群组失败: %v", err), http.StatusInternalServerError)
+			response.ServerError(w, err)
 			return
 		}
 		tx.Commit()
 
-		// 返回成功响应
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "订单已接单"})
+		response.Success(w, map[string]interface{}{
+			"order_id": order.OrderID,
+			"status":   order.OrderStatus,
+		}, "订单已成功接单")
 	}
 }
 
@@ -218,7 +269,9 @@ func HandlePublishDeliveryOrder(db *sql.DB, rp *database.RedisPool) http.Handler
 			"order_time":   time.Now().Unix(),
 		}
 		orderJSON, _ := json.Marshal(orderInfo)
-		rdb.Publish(context.Background(), "public_hall", orderJSON)
+		monitoring.RecordRedisTime("Publish", func() error {
+			return rdb.Publish(context.Background(), "public_hall", orderJSON).Err()
+		})
 
 		// 返回成功响应
 		w.WriteHeader(http.StatusOK)
@@ -284,7 +337,9 @@ rows, err := db.Query(query, orderLon, orderLat, maxDistance)
 			// 通知骑手新订单
 			notifyChannel := fmt.Sprintf("rider_%d", selectedRiderID)
 			orderJSON, _ := json.Marshal(order)
-			_, err := rdb.Publish(context.Background(), notifyChannel, orderJSON).Result()
+			err := monitoring.RecordRedisTime("Publish", func() error {
+				return rdb.Publish(context.Background(), notifyChannel, orderJSON).Err()
+			})
 			if err != nil {
 				fmt.Printf("通知骑手失败: %v\n", err)
 				continue
@@ -331,7 +386,12 @@ func GetOrderListFromMQ(rp *database.RedisPool) http.HandlerFunc {
 		var orderList []map[string]interface{}
 
 		for i := 0; i < 10; i++ { // 假设每次获取最多 10 个订单
-			orderJSON, err := rdb.LPop(context.Background(), "public_hall").Result()
+			var orderJSON string
+			var err error
+			monitoring.RecordRedisTime("LPop", func() error {
+				orderJSON, err = rdb.LPop(context.Background(), "public_hall").Result()
+				return err
+			})
 			if err == redis.Nil {
 				break // 没有更多订单
 			} else if err != nil {

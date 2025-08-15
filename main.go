@@ -47,15 +47,19 @@ func main() {
 	go handlers.StartOrderConsumer(rp)
 	go database.StartWeeklyCleanUpScheduler(db)
 
-	// 无需Token验证的路由
-	http.Handle("/user/register", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleRegister(db, rp))))
-	http.Handle("/user/login", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleLogin(db, rp))))
-	http.Handle("/shop/register", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleRegisterShop(db, rp))))
-	http.Handle("/shop/login", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleLoginShop(db, rp))))
-	http.Handle("/rider/apply", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleApplyForRider(db, rp))))
-	http.Handle("/refresh", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleRefreshToken(rp))))
+	// 暴露 /metrics 接口
+	http.Handle("/metrics", handlers.LoggingMiddleware(monitoring.MetricsHandler()))
 
-	// 用户路由组
+	// 无需Token验证的路由 - 使用/auth路径避免冲突
+	http.Handle("/api/auth/user/register", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleUserRegister(db, rp))))
+	http.Handle("/api/auth/user/login", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleUserLogin(db))))
+	http.Handle("/api/auth/shop/register", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleShopRegister(db, rp))))
+	http.Handle("/api/auth/shop/login", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleShopLogin(db))))
+	http.Handle("/api/auth/rider/register", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleRiderRegister(db, rp))))
+	http.Handle("/api/auth/rider/login", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleRiderLogin(db))))
+	http.Handle("/api/auth/refresh", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleRefreshToken(rp))))
+
+	// 用户路由组 - 需要认证，使用精确路径避免与auth路由冲突
 	userRoutes := http.NewServeMux()
 	userRoutes.Handle("/shops", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleGetShops(db))))
 	userRoutes.Handle("/products", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleShopProducts(db, rp))))
@@ -68,9 +72,9 @@ func main() {
 	// 评价路由
 	userRoutes.Handle("/review/create", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.CreateReview(db, rp))))
 	userRoutes.Handle("/review/update", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.UpdateReview(db, rp))))
-	http.Handle("/user/", handlers.LoggingMiddleware(handlers.AuthenticateToken(rp)(userRoutes)))
+	http.Handle("/api/user/", handlers.LoggingMiddleware(handlers.AuthenticateToken(rp)(http.StripPrefix("/api/user", userRoutes))))
 
-	// 商家路由组
+	// 商家路由组 - 需要认证
 	shopRoutes := http.NewServeMux()
 	shopRoutes.Handle("/add_product", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleAddProduct(db, rp))))
 	shopRoutes.Handle("/update_stock", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleUpdateProductStock(db, rp))))
@@ -80,18 +84,15 @@ func main() {
 	shopRoutes.Handle("/reviews", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.GetShopReviews(db, rp))))
 	shopRoutes.Handle("/review/reply", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.ReplyToReview(db, rp))))
 	shopRoutes.Handle("/review/analytics", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.GetReviewAnalytics(db, rp))))
-	http.Handle("/shop/", handlers.LoggingMiddleware(handlers.AuthenticateTokenShop(rp)(shopRoutes)))
+	http.Handle("/api/shop/", handlers.LoggingMiddleware(handlers.AuthenticateTokenShop(rp)(http.StripPrefix("/api/shop", shopRoutes))))
 
-	// 骑手路由组
+	// 骑手路由组 - 需要认证
 	riderRoutes := http.NewServeMux()
 	riderRoutes.Handle("/grab", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleRiderGrabOrder(db, rp))))
 	riderRoutes.Handle("/complete", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.HandleCompleteOrder(db))))
 	// 评价路由
 	riderRoutes.Handle("/confirm_delivery", handlers.LoggingMiddleware(monitoring.PrometheusMiddleware(handlers.RiderConfirmDelivery(db, rp))))
-	http.Handle("/rider/", handlers.LoggingMiddleware(handlers.AuthenticateTokenRider(rp)(riderRoutes)))
-
-	// 暴露 /metrics 接口
-	http.Handle("/metrics", handlers.LoggingMiddleware(monitoring.MetricsHandler()))
+	http.Handle("/api/rider/", handlers.LoggingMiddleware(handlers.AuthenticateTokenRider(rp)(http.StripPrefix("/api/rider", riderRoutes))))
 
 	// 启动服务器
 	logging.Info("服务器启动，端口 :8080", nil)

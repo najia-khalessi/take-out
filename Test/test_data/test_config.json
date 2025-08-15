@@ -1,0 +1,48 @@
+{
+  "test_metadata": {
+    "timestamp": "2025-08-15T18:17:39+08:00",
+    "base_url": "http://localhost:8080",
+    "test_id": "1755253059817551769",
+    "version": "1.0.0"
+  },
+  "test_accounts": {
+    "user": {
+      "phone": "18612345678",
+      "password": "TestUser123",
+      "name": "测试用户张",
+      "address": "北京市海淀区中关村大街1号"
+    },
+    "shop": {
+      "phone": "18612345679", 
+      "password": "TestShop123",
+      "name": "川味轩测试饭店",
+      "address": "北京市朝阳区建国路88号",
+      "description": "正宗川菜，麻辣鲜香",
+      "latitude": 39.9042,
+      "longitude": 116.4074
+    },
+    "rider": {
+      "phone": "18612345680",
+      "password": "TestRider123",
+      "name": "骑手李大勇",
+      "vehicle": "摩托车",
+      "fee": 5.0,
+      "latitude": 39.9042,
+      "longitude": 116.4074
+    }
+  },
+  "test_products": [
+    {
+      "name": "宫保鸡丁(经典版)",
+      "price": 28.80,
+      "description": "精选鸡肉配脆香花生，正宗川菜味道，鲜香麻辣",
+      "stock": 100
+    },
+    {
+      "name": "麻婆豆腐(微辣)",  
+      "price": 18.80,
+      "description": "嫩滑豆腐配特制豆瓣酱，经典川菜，口感丰富",
+      "stock": 150
+    }
+  ]
+}
