@@ -4,3 +4,6 @@ app.log
 
 # Binaries
 takeout-backend
+
+# External directories
+pgsql-openai/
