@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"take-out/logging"
 	"take-out/models"
+	"take-out/monitoring"
 
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/bcrypt"
@@ -16,9 +17,11 @@ import (
 func InsertShop(rp *RedisPool, db *sql.DB, shop *models.Shop) (int64, error) {
 	logging.Info("Attempting to insert a new shop", logrus.Fields{"shopName": shop.ShopName})
 	// 将商家信息插入 PostgreSQL
-	query := "INSERT INTO shops (shopname, shoppassword, shopphone, shopaddress, description) VALUES ($1, $2, $3, $4, $5) RETURNING shopid"
+	query := "INSERT INTO shops (shopname, shoppassword, shopphone, shopaddress, shopdescription) VALUES ($1, $2, $3, $4, $5) RETURNING shopid"
 	var shopID int64
-	err := db.QueryRow(query, shop.ShopName, shop.ShopPassword, shop.ShopPhone, shop.ShopAddress, shop.Description).Scan(&shopID)
+	err := monitoring.RecordDBTime("InsertShop", func() error {
+		return db.QueryRow(query, shop.ShopName, shop.ShopPassword, shop.ShopPhone, shop.ShopAddress, shop.Description).Scan(&shopID)
+	})
 	if err != nil {
 		logging.Error("Failed to insert shop into PostgreSQL", logrus.Fields{"error": err})
 		return 0, fmt.Errorf("商家信息插入PostgreSQL失败: %v", err)
@@ -49,7 +52,9 @@ func CheckShopExist(db *sql.DB, shopID int) (bool, error) {
 	logging.Info("Checking if shop exists", logrus.Fields{"shopID": shopID})
 	var exists bool
 	query := "SELECT EXISTS(SELECT 1 FROM shops WHERE shopid = $1)"
-	err := db.QueryRow(query, shopID).Scan(&exists)
+	err := monitoring.RecordDBTime("CheckShopExist", func() error {
+		return db.QueryRow(query, shopID).Scan(&exists)
+	})
 	if err != nil {
 		logging.Error("Failed to check if shop exists", logrus.Fields{"error": err})
 		return false, fmt.Errorf("检查商店是否存在失败: %v", err)
@@ -62,12 +67,17 @@ func CheckShopExist(db *sql.DB, shopID int) (bool, error) {
 func QueryShops(db *sql.DB, offset, limit int) ([]models.Shop, error) {
 	logging.Info("Querying shops with pagination", logrus.Fields{"offset": offset, "limit": limit})
 	query := `
-        SELECT shopid, shopname, shopaddress, shopphone, description
+        SELECT shopid, shopname, shopaddress, shopphone, shopdescription
         FROM shops
         ORDER BY shopid
         LIMIT $1 OFFSET $2
     `
-	rows, err := db.Query(query, limit, offset)
+	var rows *sql.Rows
+	var err error
+	err = monitoring.RecordDBTime("QueryShops", func() error {
+		rows, err = db.Query(query, limit, offset)
+		return err
+	})
 	if err != nil {
 		logging.Error("Failed to query shops", logrus.Fields{"error": err})
 		return nil, fmt.Errorf("查询商家失败: %v", err)
@@ -101,14 +111,19 @@ func QueryNearbyShops(db *sql.DB, longitude, latitude float64) ([]models.Shop, e
 	)
 
 	query := `
-        SELECT shopid, shopname, shopphone, shopaddress, description, shoplatitude, shoplongitude,
+        SELECT shopid, shopname, shopphone, shopaddress, shopdescription, shoplatitude, shoplongitude,
                (point(shoplongitude, shoplatitude) <@> point($1, $2)) * 1.609344 AS distance
         FROM shops
         WHERE (point(shoplongitude, shoplatitude) <@> point($1, $2)) * 1.609344 < $3
         ORDER BY distance
         LIMIT $4
     `
-	rows, err := db.Query(query, longitude, latitude, maxDistance, maxResults)
+	var rows *sql.Rows
+	var err error
+	err = monitoring.RecordDBTime("QueryNearbyShops", func() error {
+		rows, err = db.Query(query, longitude, latitude, maxDistance, maxResults)
+		return err
+	})
 	if err != nil {
 		logging.Error("Failed to query nearby shops", logrus.Fields{"error": err})
 		return nil, fmt.Errorf("查询附近商家失败: %v", err)
@@ -145,7 +160,12 @@ func QueryNearbyShops(db *sql.DB, longitude, latitude float64) ([]models.Shop, e
 func QueryProductsByShopID(db *sql.DB, shopID int) ([]models.Product, error) {
 	logging.Info("Querying products by shop ID", logrus.Fields{"shopID": shopID})
 	query := "SELECT productid, productname, description, price, stock FROM products WHERE shopid = $1 ORDER BY productid"
-	rows, err := db.Query(query, shopID)
+	var rows *sql.Rows
+	var err error
+	err = monitoring.RecordDBTime("QueryProductsByShopID", func() error {
+		rows, err = db.Query(query, shopID)
+		return err
+	})
 	if err != nil {
 		logging.Error("Failed to query products by shop ID", logrus.Fields{"error": err})
 		return nil, fmt.Errorf("查询商品失败: %v", err)
@@ -171,14 +191,16 @@ func QueryProductsByShopID(db *sql.DB, shopID int) ([]models.Product, error) {
 }
 
 // ValidateShop 验证商家凭据
-func ValidateShop(db *sql.DB, shopName, password string) (*models.Shop, error) {
-	logging.Info("Validating shop credentials", logrus.Fields{"shopName": shopName})
+func ValidateShop(db *sql.DB, shopphone, password string) (*models.Shop, error) {
+	logging.Info("Validating shop credentials", logrus.Fields{"shopphone": shopphone})
 	var shop models.Shop
-	query := "SELECT shopid, shopname, shoppassword, shopphone, shopaddress, description FROM shops WHERE shopname = $1"
-	err := db.QueryRow(query, shopName).Scan(&shop.ShopID, &shop.ShopName, &shop.ShopPassword, &shop.ShopPhone, &shop.ShopAddress, &shop.Description)
+	query := "SELECT shopid, shopname, shoppassword, shopphone, shopaddress, shopdescription FROM shops WHERE shopphone = $1"
+	err := monitoring.RecordDBTime("ValidateShop", func() error {
+		return db.QueryRow(query, shopphone).Scan(&shop.ShopID, &shop.ShopName, &shop.ShopPassword, &shop.ShopPhone, &shop.ShopAddress, &shop.Description)
+	})
 	if err != nil {
 		if err == sql.ErrNoRows {
-			logging.Warn("Shop not found", logrus.Fields{"shopName": shopName})
+			logging.Warn("Shop not found", logrus.Fields{"shopphone": shopphone})
 			return nil, fmt.Errorf("商家不存在")
 		}
 		logging.Error("Failed to query shop", logrus.Fields{"error": err})
@@ -187,7 +209,7 @@ func ValidateShop(db *sql.DB, shopName, password string) (*models.Shop, error) {
 
 	err = bcrypt.CompareHashAndPassword([]byte(shop.ShopPassword), []byte(password))
 	if err != nil {
-		logging.Warn("Incorrect password for shop", logrus.Fields{"shopName": shopName})
+		logging.Warn("Incorrect password for shop", logrus.Fields{"shopphone": shopphone})
 		return nil, fmt.Errorf("密码错误")
 	}
 	logging.Info("Successfully validated shop", logrus.Fields{"shopID": shop.ShopID})

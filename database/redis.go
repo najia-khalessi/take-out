@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"take-out/monitoring"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -66,19 +67,29 @@ func (rp *RedisPool) PutClient(rdb *redis.Client) {
 func GetFromCache(rp *RedisPool, key string) (string, error) {
 	rdb := rp.GetClient()   // 从连接池获取一个 Redis 客户端
 	defer rp.PutClient(rdb) // 使用完后归还到连接池
-	return rdb.Get(ctx, key).Result()
+	var val string
+	var err error
+	monitoring.RecordRedisTime("Get", func() error {
+		val, err = rdb.Get(ctx, key).Result()
+		return err
+	})
+	return val, err
 }
 
 // 将数据写入 Redis
 func SetToCache(rp *RedisPool, key string, value string, expiration time.Duration) error {
 	rdb := rp.GetClient()   // 从连接池获取 Redis 客户端
 	defer rp.PutClient(rdb) // 使用完后归还到连接池
-	return rdb.Set(ctx, key, value, expiration).Err()
+	return monitoring.RecordRedisTime("Set", func() error {
+		return rdb.Set(ctx, key, value, expiration).Err()
+	})
 }
 
 // 删除 Redis 中的键
 func DeleteFromCache(rp *RedisPool, key string) error {
 	rdb := rp.GetClient()   // 从连接池获取 Redis 客户端
 	defer rp.PutClient(rdb) // 使用完后归还到连接池
-	return rdb.Del(ctx, key).Err()
+	return monitoring.RecordRedisTime("Del", func() error {
+		return rdb.Del(ctx, key).Err()
+	})
 }

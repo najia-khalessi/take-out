@@ -42,7 +42,7 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION ai_review_deinit()
 RETURNS VOID AS $$
 BEGIN
-    -- 此函数可以保留，用于未来可能的清理任务
-    -- 例如：TRUNCATE some_temporary_table;
+    -- 清理任务
+    TRUNCATE some_temporary_table;
 END;
 $$ LANGUAGE plpgsql;

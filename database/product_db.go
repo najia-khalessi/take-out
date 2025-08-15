@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"take-out/models"
+	"take-out/monitoring"
 )
 
 //添加商品到商店
@@ -20,7 +21,9 @@ func AddProductForShop(rp *RedisPool, db *sql.DB, ShopID int, product *models.Pr
 	query := `INSERT INTO products (shopid, productname, price, description, stock)
 			 VALUES ($1, $2, $3, $4, $5) RETURNING productid`
 	var productID int64
-	err := db.QueryRow(query, product.ShopID, product.ProductName, product.Price, product.Description, product.Stock).Scan(&productID)
+	err := monitoring.RecordDBTime("AddProductForShop", func() error {
+		return db.QueryRow(query, product.ShopID, product.ProductName, product.Price, product.Description, product.Stock).Scan(&productID)
+	})
 	if err != nil {
 		return 0, fmt.Errorf("添加商品失败: %v", err)
 	}
@@ -48,7 +51,12 @@ func AddProductForShop(rp *RedisPool, db *sql.DB, ShopID int, product *models.Pr
 func UpdateProductStock(rp *RedisPool, db *sql.DB, productID int, newStock int) error {
 	// 更新数据库中的库存
 	query := `UPDATE products SET stock = $1 WHERE productid = $2`
-	result, err := db.Exec(query, newStock, productID)
+	var result sql.Result
+	err := monitoring.RecordDBTime("UpdateProductStock", func() error {
+		var err error
+		result, err = db.Exec(query, newStock, productID)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("更新库存失败: %v", err)
 	}

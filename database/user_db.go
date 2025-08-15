@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"take-out/logging"
 	"take-out/models"
+	"take-out/monitoring"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -17,41 +18,47 @@ import (
 //创建用户
 func InsertUser(rp *RedisPool, db *sql.DB, user *models.User) (int64, error) {
 	logging.Info("Attempting to insert a new user", logrus.Fields{"username": user.Username})
-	//开启事务
-	tx, err := db.Begin()
-	if err != nil {
-		logging.Error("Failed to begin transaction", logrus.Fields{"error": err})
-		return 0, fmt.Errorf("开启事务失败: %v", err)
-	}
-	defer tx.Rollback()
-
-	//检查用户名是否已存在，确保用户名的唯一性
-	var count int
-	checkQuery := `SELECT COUNT(*) FROM users WHERE username = $1`
-	err = tx.QueryRow(checkQuery, user.Username).Scan(&count)
-	if err != nil {
-		logging.Error("Failed to query username", logrus.Fields{"error": err})
-		return 0, fmt.Errorf("查询用户名失败: %v", err)
-	}
-	if count > 0 {
-		logging.Warn("Username already exists", logrus.Fields{"username": user.Username})
-		return 0, fmt.Errorf("用户名已存在")
-	}
-
-	//插入数据库
-	query := "INSERT INTO users (username, userpassword, userphone, useraddress) VALUES ($1, $2, $3, $4) RETURNING userid"
 	var userID int64
-	err = tx.QueryRow(query, user.Username, user.UserPassword, user.UserPhone, user.UserAddress).Scan(&userID)
-	if err != nil {
-		logging.Error("Failed to insert user into database", logrus.Fields{"error": err})
-		return 0, fmt.Errorf("插入数据库失败: %v", err)
-	}
+	err := monitoring.RecordDBTime("InsertUser", func() error {
+		//开启事务
+		tx, err := db.Begin()
+		if err != nil {
+			logging.Error("Failed to begin transaction", logrus.Fields{"error": err})
+			return fmt.Errorf("开启事务失败: %v", err)
+		}
+		defer tx.Rollback()
 
-	//提交事务
-	err = tx.Commit()
+		//检查用户名是否已存在，确保用户名的唯一性
+		var count int
+		checkQuery := `SELECT COUNT(*) FROM users WHERE username = $1`
+		err = tx.QueryRow(checkQuery, user.Username).Scan(&count)
+		if err != nil {
+			logging.Error("Failed to query username", logrus.Fields{"error": err})
+			return fmt.Errorf("查询用户名失败: %v", err)
+		}
+		if count > 0 {
+			logging.Warn("Username already exists", logrus.Fields{"username": user.Username})
+			return fmt.Errorf("用户名已存在")
+		}
+
+		//插入数据库
+		query := "INSERT INTO users (username, userpassword, userphone, useraddress) VALUES ($1, $2, $3, $4) RETURNING userid"
+		err = tx.QueryRow(query, user.Username, user.UserPassword, user.UserPhone, user.UserAddress).Scan(&userID)
+		if err != nil {
+			logging.Error("Failed to insert user into database", logrus.Fields{"error": err})
+			return fmt.Errorf("插入数据库失败: %v", err)
+		}
+
+		//提交事务
+		err = tx.Commit()
+		if err != nil {
+			logging.Error("Failed to commit transaction", logrus.Fields{"error": err})
+			return fmt.Errorf("提交事务失败: %v", err)
+		}
+		return nil
+	})
 	if err != nil {
-		logging.Error("Failed to commit transaction", logrus.Fields{"error": err})
-		return 0, fmt.Errorf("提交事务失败: %v", err)
+		return 0, err
 	}
 	// 插入Redis
 	ctx := context.Background()
@@ -75,49 +82,55 @@ func InsertUser(rp *RedisPool, db *sql.DB, user *models.User) (int64, error) {
 // 更新用户
 func UpdateUser(rp *RedisPool, db *sql.DB, user *models.User) error {
 	logging.Info("Attempting to update user", logrus.Fields{"userID": user.UserID})
-	// 开启事务
-	tx, err := db.Begin()
-	if err != nil {
-		logging.Error("Failed to begin transaction", logrus.Fields{"error": err})
-		return fmt.Errorf("开启事务失败: %v", err)
-	}
-	defer tx.Rollback()
+	err := monitoring.RecordDBTime("UpdateUser", func() error {
+		// 开启事务
+		tx, err := db.Begin()
+		if err != nil {
+			logging.Error("Failed to begin transaction", logrus.Fields{"error": err})
+			return fmt.Errorf("开启事务失败: %v", err)
+		}
+		defer tx.Rollback()
 
-	// 确保用户存在
-	var count int
-	checkQuery := `SELECT COUNT(*) FROM users WHERE userid = $1`
-	err = tx.QueryRow(checkQuery, user.UserID).Scan(&count)
-	if err != nil {
-		logging.Error("Failed to query user", logrus.Fields{"error": err})
-		return fmt.Errorf("查询用户失败: %v", err)
-	}
-	if count == 0 {
-		logging.Warn("User does not exist", logrus.Fields{"userID": user.UserID})
-		return fmt.Errorf("用户不存在")
-	}
+		// 确保用户存在
+		var count int
+		checkQuery := `SELECT COUNT(*) FROM users WHERE userid = $1`
+		err = tx.QueryRow(checkQuery, user.UserID).Scan(&count)
+		if err != nil {
+			logging.Error("Failed to query user", logrus.Fields{"error": err})
+			return fmt.Errorf("查询用户失败: %v", err)
+		}
+		if count == 0 {
+			logging.Warn("User does not exist", logrus.Fields{"userID": user.UserID})
+			return fmt.Errorf("用户不存在")
+		}
 
-	// 更新数据库
-	updateQuery := `UPDATE users 
+		// 更新数据库
+		updateQuery := `UPDATE users 
                    SET username = $1, 
                        userpassword = $2, 
                        userphone = $3, 
                        useraddress = $4 
                    WHERE userid = $5`
-	_, err = tx.Exec(updateQuery,
-		user.Username,
-		user.UserPassword,
-		user.UserPhone,
-		user.UserAddress,
-		user.UserID)
-	if err != nil {
-		logging.Error("Failed to update user in database", logrus.Fields{"error": err})
-		return fmt.Errorf("更新数据库失败: %v", err)
-	}
+		_, err = tx.Exec(updateQuery,
+			user.Username,
+			user.UserPassword,
+			user.UserPhone,
+			user.UserAddress,
+			user.UserID)
+		if err != nil {
+			logging.Error("Failed to update user in database", logrus.Fields{"error": err})
+			return fmt.Errorf("更新数据库失败: %v", err)
+		}
 
-	// 提交事务
-	if err = tx.Commit(); err != nil {
-		logging.Error("Failed to commit transaction", logrus.Fields{"error": err})
-		return fmt.Errorf("提交事务失败: %v", err)
+		// 提交事务
+		if err = tx.Commit(); err != nil {
+			logging.Error("Failed to commit transaction", logrus.Fields{"error": err})
+			return fmt.Errorf("提交事务失败: %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
 	// 更新Redis缓存
@@ -153,7 +166,12 @@ func GetAllUsers(db *sql.DB, offset, limit int) ([]models.User, error) {
 			LIMIT $1 OFFSET $2`
 	//OFFSET = (页码 - 1) * 每页数量   LIMIT = 每页数量
 
-	rows, err := db.Query(query, limit, offset)
+	var rows *sql.Rows
+	var err error
+	err = monitoring.RecordDBTime("GetAllUsers", func() error {
+		rows, err = db.Query(query, limit, offset)
+		return err
+	})
 	if err != nil {
 		logging.Error("Failed to get all users", logrus.Fields{"error": err})
 		return nil, err
@@ -176,26 +194,32 @@ func GetAllUsers(db *sql.DB, offset, limit int) ([]models.User, error) {
 //删除用户
 func DeleteUser(rp *RedisPool, db *sql.DB, userID int) error {
 	logging.Info("Attempting to delete user", logrus.Fields{"userID": userID})
-	// 开启事务
-	tx, err := db.Begin()
-	if err != nil {
-		logging.Error("Failed to begin transaction", logrus.Fields{"error": err})
-		return fmt.Errorf("开启事务失败: %v", err)
-	}
-	defer tx.Rollback()
+	err := monitoring.RecordDBTime("DeleteUser", func() error {
+		// 开启事务
+		tx, err := db.Begin()
+		if err != nil {
+			logging.Error("Failed to begin transaction", logrus.Fields{"error": err})
+			return fmt.Errorf("开启事务失败: %v", err)
+		}
+		defer tx.Rollback()
 
-	// 删除数据库中的用户
-	deleteQuery := `DELETE FROM users WHERE userid = $1`
-	_, err = tx.Exec(deleteQuery, userID)
-	if err != nil {
-		logging.Error("Failed to delete user from database", logrus.Fields{"error": err})
-		return fmt.Errorf("删除数据库用户失败: %v", err)
-	}
+		// 删除数据库中的用户
+		deleteQuery := `DELETE FROM users WHERE userid = $1`
+		_, err = tx.Exec(deleteQuery, userID)
+		if err != nil {
+			logging.Error("Failed to delete user from database", logrus.Fields{"error": err})
+			return fmt.Errorf("删除数据库用户失败: %v", err)
+		}
 
-	// 提交事务
-	if err = tx.Commit(); err != nil {
-		logging.Error("Failed to commit transaction", logrus.Fields{"error": err})
-		return fmt.Errorf("提交事务失败: %v", err)
+		// 提交事务
+		if err = tx.Commit(); err != nil {
+			logging.Error("Failed to commit transaction", logrus.Fields{"error": err})
+			return fmt.Errorf("提交事务失败: %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
 	// 从Redis中删除用户缓存
@@ -214,14 +238,16 @@ func DeleteUser(rp *RedisPool, db *sql.DB, userID int) error {
 }
 
 // ValidateUser 验证用户凭据
-func ValidateUser(db *sql.DB, username, password string) (*models.User, error) {
-	logging.Info("Attempting to validate user", logrus.Fields{"username": username})
+func ValidateUser(db *sql.DB, userphone, password string) (*models.User, error) {
+	logging.Info("Attempting to validate user", logrus.Fields{"userphone": userphone})
 	var user models.User
-	query := "SELECT userid, username, userpassword, userphone, useraddress FROM users WHERE username = $1"
-	err := db.QueryRow(query, username).Scan(&user.UserID, &user.Username, &user.UserPassword, &user.UserPhone, &user.UserAddress)
+	query := "SELECT userid, username, userpassword, userphone, useraddress FROM users WHERE userphone = $1"
+	err := monitoring.RecordDBTime("ValidateUser", func() error {
+		return db.QueryRow(query, userphone).Scan(&user.UserID, &user.Username, &user.UserPassword, &user.UserPhone, &user.UserAddress)
+	})
 	if err != nil {
 		if err == sql.ErrNoRows {
-			logging.Warn("User not found", logrus.Fields{"username": username})
+			logging.Warn("User not found", logrus.Fields{"userphone": userphone})
 			return nil, fmt.Errorf("用户不存在")
 		}
 		logging.Error("Failed to query user", logrus.Fields{"error": err})
@@ -230,7 +256,7 @@ func ValidateUser(db *sql.DB, username, password string) (*models.User, error) {
 
 	err = bcrypt.CompareHashAndPassword([]byte(user.UserPassword), []byte(password))
 	if err != nil {
-		logging.Warn("Incorrect password", logrus.Fields{"username": username})
+		logging.Warn("Incorrect password", logrus.Fields{"userphone": userphone})
 		return nil, fmt.Errorf("密码错误")
 	}
 	logging.Info("Successfully validated user", logrus.Fields{"userID": user.UserID})
@@ -243,7 +269,9 @@ func GetUserByID(db *sql.DB, userID int) (*models.User, error) {
 	logging.Info("Attempting to get user by ID", logrus.Fields{"userID": userID})
 	var user models.User
 	query := "SELECT userid, username, userphone, useraddress FROM users WHERE userid = $1"
-	err := db.QueryRow(query, userID).Scan(&user.UserID, &user.Username, &user.UserPhone, &user.UserAddress)
+	err := monitoring.RecordDBTime("GetUserByID", func() error {
+		return db.QueryRow(query, userID).Scan(&user.UserID, &user.Username, &user.UserPhone, &user.UserAddress)
+	})
 	if err != nil {
 		if err == sql.ErrNoRows {
 			logging.Warn("User not found", logrus.Fields{"userID": userID})
@@ -254,4 +282,50 @@ func GetUserByID(db *sql.DB, userID int) (*models.User, error) {
 	}
 	logging.Info("Successfully retrieved user by ID", logrus.Fields{"userID": user.UserID})
 	return &user, nil
+}
+
+// GetUserByUsername 从数据库获取用户信息
+func GetUserByUsername(db *sql.DB, username string) (*models.User, error) {
+	logging.Info("Attempting to get user by username", logrus.Fields{"username": username})
+	var user models.User
+	query := "SELECT userid, username, userphone, useraddress FROM users WHERE username = $1"
+	err := monitoring.RecordDBTime("GetUserByUsername", func() error {
+		return db.QueryRow(query, username).Scan(&user.UserID, &user.Username, &user.UserPhone, &user.UserAddress)
+	})
+	if err != nil {
+		if err == sql.ErrNoRows {
+			logging.Warn("User not found", logrus.Fields{"username": username})
+			return nil, fmt.Errorf("用户不存在")
+		}
+		logging.Error("Failed to query user by username", logrus.Fields{"error": err})
+		return nil, fmt.Errorf("查询用户失败: %v", err)
+	}
+	logging.Info("Successfully retrieved user by username", logrus.Fields{"userID": user.UserID})
+	return &user, nil
+}
+
+// ValidateRider 验证骑手凭据
+func ValidateRider(db *sql.DB, riderphone, password string) (*models.Rider, error) {
+	logging.Info("Attempting to validate rider", logrus.Fields{"riderphone": riderphone})
+	var rider models.Rider
+	query := "SELECT riderid, ridername, riderpassword, riderphone, vehicletype FROM riders WHERE riderphone = $1"
+	err := monitoring.RecordDBTime("ValidateRider", func() error {
+		return db.QueryRow(query, riderphone).Scan(&rider.RiderID, &rider.RiderName, &rider.RiderPassword, &rider.RiderPhone, &rider.VehicleType)
+	})
+	if err != nil {
+		if err == sql.ErrNoRows {
+			logging.Warn("Rider not found", logrus.Fields{"riderphone": riderphone})
+			return nil, fmt.Errorf("骑手不存在")
+		}
+		logging.Error("Failed to query rider", logrus.Fields{"error": err})
+		return nil, fmt.Errorf("查询骑手失败: %v", err)
+	}
+
+	err = bcrypt.CompareHashAndPassword([]byte(rider.RiderPassword), []byte(password))
+	if err != nil {
+		logging.Warn("Incorrect password", logrus.Fields{"riderphone": riderphone})
+		return nil, fmt.Errorf("密码错误")
+	}
+	logging.Info("Successfully validated rider", logrus.Fields{"riderID": rider.RiderID})
+	return &rider, nil
 }

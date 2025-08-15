@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"take-out/models"
+	"take-out/monitoring"
 )
 
 // InsertReview 将评价插入数据库
@@ -13,16 +14,18 @@ func InsertReview(db *sql.DB, review *models.Review) (int, error) {
 		RETURNING review_id
 	`
 	var reviewID int
-	err := db.QueryRow(
-		query,
-		review.OrderID,
-		review.UserID,
-		review.ShopID,
-		review.RiderID,
-		review.Rating,
-		review.Content,
-		review.IsAutoReview,
-	).Scan(&reviewID)
+	err := monitoring.RecordDBTime("InsertReview", func() error {
+		return db.QueryRow(
+			query,
+			review.OrderID,
+			review.UserID,
+			review.ShopID,
+			review.RiderID,
+			review.Rating,
+			review.Content,
+			review.IsAutoReview,
+		).Scan(&reviewID)
+	})
 
 	if err != nil {
 		return 0, err

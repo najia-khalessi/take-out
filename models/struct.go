@@ -1,11 +1,14 @@
 package models
 
-import "time"
+import (
+	"time"
+	"github.com/golang-jwt/jwt"
+)
 
 // 用户结构体
 type User struct {
-	UserID   int    `json:"user_id"`
-	Username string `json:"user_name"`
+	UserID       int    `json:"user_id"`
+	Username     string `json:"user_name"`
 	UserPassword string `json:"user_password"`
 	UserPhone    string `json:"user_phone"`
 	UserAddress  string `json:"user_address"`
@@ -13,15 +16,16 @@ type User struct {
 
 // 骑手的结构
 type Rider struct {
-	User                // 内嵌 User 结构体，继承用户的基本字段
-	RiderID     int     `json:"rider_id"`     // 骑手ID，区分于 UserID
-	RiderRating float64 `json:"rider_rating"`       // 骑手的评分
-	RiderPhone	string	`json:"rider_phone"`
-	VehicleType string  `json:"vehicle_type"` // 车辆类型
-	RiderStatus string  `json:"rider_status"` // 骑手状态（如在线、休息、离线）
-	RiderLatitude    float64 `json:"rider_latitude"`     // 骑手的纬度
-	RiderLongitude   float64 `json:"rider_longitude"`    // 骑手的经度
-	DeliveryFee float64 `json:"delivery_fee"` // 配送费
+	RiderID          int     `json:"rider_id"`      // 骑手ID，区分于 UserID
+	RiderName        string  `json:"rider_name"`    // 骑手名
+	RiderPassword    string  `json:"rider_password"`// 骑手密码
+	RiderRating      float64 `json:"rider_rating"`  // 骑手的评分
+	RiderPhone       string  `json:"rider_phone"`
+	VehicleType      string  `json:"vehicle_type"`   // 车辆类型
+	RiderStatus      string  `json:"rider_status"`   // 骑手状态（如在线、休息、离线）
+	RiderLatitude    float64 `json:"rider_latitude"` // 骑手的纬度
+	RiderLongitude   float64 `json:"rider_longitude"`// 骑手的经度
+	DeliveryFee      float64 `json:"delivery_fee"`   // 配送费
 }
 
 // 商家结构体
@@ -80,4 +84,25 @@ type Message struct {
 	SenderName string    `json:"sender_name"` // "user", "shop", "rider"
 	Content    string    `json:"content"`     // 消息内容
 	Timestamp  time.Time `json:"timestamp"`   // 消息时间戳
+}
+
+// TokenPair包含访问令牌和刷新令牌
+type TokenPair struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+}
+
+// Claims 是JWT中的声明
+type Claims struct {
+	UserID int    `json:"user_id,omitempty"`
+	ShopID int    `json:"shop_id,omitempty"`
+	RiderID int    `json:"rider_id,omitempty"`
+	Type   string `json:"type"` // "access" or "refresh"
+	jwt.StandardClaims
+}
+
+// TokenBlacklist for database
+type TokenBlacklist struct {
+	JTI       string    `gorm:"primary_key"`
+	ExpiresAt time.Time `gorm:"not null"`
 }
