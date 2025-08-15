@@ -1,0 +1,6 @@
+# Log files
+app.log
+*.log
+
+# Binaries
+takeout-backend
