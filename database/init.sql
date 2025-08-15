@@ -71,7 +71,9 @@ EXECUTE FUNCTION update_updated_at_column();
 -- 3. 骑手表
 CREATE TABLE riders (
     riderid SERIAL PRIMARY KEY,
-    userid INT NOT NULL UNIQUE,
+    ridername VARCHAR(50) NOT NULL UNIQUE,
+    riderpassword VARCHAR(255) NOT NULL,
+    riderphone VARCHAR(20),
     vehicletype VARCHAR(50),
     riderstatus VARCHAR(10) DEFAULT 'offline' CHECK (riderstatus IN ('online', 'offline', 'busy')),
     rating DECIMAL(3, 2) DEFAULT 5.00,
@@ -79,12 +81,13 @@ CREATE TABLE riders (
     riderlongitude DECIMAL(11, 8),
     delivery_fee DECIMAL(10,2) DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (userid) REFERENCES users(userid) ON DELETE CASCADE
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 COMMENT ON TABLE riders IS '骑手表';
-COMMENT ON COLUMN riders.userid IS '关联的用户ID';
+COMMENT ON COLUMN riders.ridername IS '骑手用户名';
+COMMENT ON COLUMN riders.riderpassword IS '骑手密码';
+COMMENT ON COLUMN riders.riderphone IS '骑手手机号';
 COMMENT ON COLUMN riders.vehicletype IS '交通工具类型';
 COMMENT ON COLUMN riders.riderstatus IS '骑手状态：在线/离线/忙碌';
 COMMENT ON COLUMN riders.rating IS '骑手评分';
@@ -94,10 +97,16 @@ COMMENT ON COLUMN riders.delivery_fee IS '配送费';
 COMMENT ON COLUMN riders.created_at IS '创建时间';
 COMMENT ON COLUMN riders.updated_at IS '更新时间';
 
+-- 添加触发器
 CREATE TRIGGER update_riders_updated_at
 BEFORE UPDATE ON riders
 FOR EACH ROW
 EXECUTE FUNCTION update_updated_at_column();
+
+-- 添加索引
+CREATE INDEX idx_riders_status ON riders(riderstatus);
+CREATE INDEX idx_riders_location ON riders(riderlatitude, riderlongitude);
+CREATE INDEX idx_riders_riderphone ON riders(riderphone);
 
 -- 4. 商品表
 CREATE TABLE products (
@@ -241,9 +250,6 @@ INSERT INTO shops (shopname, shoppassword, shopphone, shopaddress, shopdescripti
 ('麦当劳', 'hashed_password_placeholder', '400-123-4567', '北京市朝阳区建国门外大街1号', '快餐连锁店', 39.9042, 116.4074),
 ('肯德基', 'hashed_password_placeholder', '400-765-4321', '上海市浦东新区陆家嘴环路1000号', '快餐连锁店', 31.2304, 121.4737);
 
-INSERT INTO riders (userid, vehicletype, riderstatus, riderlatitude, riderlongitude) VALUES
-(1, '电动车', 'online', 39.9042, 116.4074);
-
 -- 评价主表
 CREATE TABLE reviews (
     review_id SERIAL PRIMARY KEY,
@@ -312,3 +318,9 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS review_deadline TIMESTAMP;
 
 -- 骑手确认送达状态
 ALTER TABLE orders ADD COLUMN delivery_confirmed_by_rider BOOLEAN DEFAULT FALSE;
+
+-- Token黑名单表
+CREATE TABLE token_blacklist (
+    jti VARCHAR(255) PRIMARY KEY,
+    expires_at TIMESTAMP NOT NULL
+);
